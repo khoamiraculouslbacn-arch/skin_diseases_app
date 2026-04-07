@@ -1,26 +1,12 @@
-import streamlit as st
-import subprocess
-import sys
-
-# Cài PyTorch CPU version nếu chưa có (chỉ chạy lần đầu)
-try:
-    import torch
-except ImportError:
-    st.info("🔄 Đang cài PyTorch... (lần đầu có thể mất 1-2 phút)")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cpu"])
-    import torch
-
+import gradio as gr
+import torch
 import torch.nn as nn
 from torchvision import transforms
 from PIL import Image
 import gdown
 import os
 
-st.set_page_config(page_title="Chẩn đoán Bệnh Da Liễu", layout="centered")
-st.title("🩺 Chẩn đoán Bệnh Da Liễu")
-st.markdown("**Mô hình: EfficientNet-B2 + CBAM** - Đồ án tốt nghiệp")
-
-# ====================== CBAM Module ======================
+# ====================== CBAM & Model ======================
 class CBAM(nn.Module):
     def __init__(self, in_planes):
         super().__init__()
@@ -39,7 +25,6 @@ class CBAM(nn.Module):
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         return x * self.sa(torch.cat([avg_out, max_out], dim=1))
 
-# ====================== Model ======================
 class EfficientNetCBAM(nn.Module):
     def __init__(self, num_classes=23):
         super().__init__()
@@ -59,16 +44,13 @@ class EfficientNetCBAM(nn.Module):
         x = torch.flatten(x, 1)
         return self.classifier(x)
 
-# Load model từ Google Drive
-@st.cache_resource
+# Load model
+@gr.cache
 def load_model():
     model_path = "efficientnet_b2_cbam_best.pth"
     if not os.path.exists(model_path):
-        st.info("🔄 Đang tải mô hình từ Google Drive (lần đầu có thể mất 30-60 giây)...")
         url = "https://drive.google.com/uc?id=1nvzGwzw4rvlI8Oqontw01e9zcOquN_Wv"
-        gdown.download(url, model_path, quiet=False)
-        st.success("✅ Tải mô hình thành công!")
-    
+        gdown.download(url, model_path, quiet=True)
     model = EfficientNetCBAM(num_classes=23)
     model.load_state_dict(torch.load(model_path, map_location='cpu', weights_only=True))
     model.eval()
@@ -76,14 +58,7 @@ def load_model():
 
 model = load_model()
 
-# Class names
-class_names = [
-    "Acne and Rosacea Photos", "Actinic Keratosis Basal Cell Carcinoma", "Atopic Dermatitis Photos",
-    "Bullous Disease Photos", "Cellulitis Impetigo", "Eczema Photos", "Exanthems and Drug Eruptions",
-    "Hair Loss Photos", "Herpes HPV", "Light Diseases", "Lupus", "Melanoma", "Nail Fungus",
-    "Poison Ivy", "Psoriasis Lichen Planus", "Rosacea", "Seborrheic Keratoses", "Systemic Disease",
-    "Tinea Ringworm", "Urticaria Hives", "Vascular Tumors", "Vasculitis", "Warts Molluscum"
-]
+class_names = ["Acne and Rosacea Photos", "Actinic Keratosis Basal Cell Carcinoma", "Atopic Dermatitis Photos", "Bullous Disease Photos", "Cellulitis Impetigo", "Eczema Photos", "Exanthems and Drug Eruptions", "Hair Loss Photos", "Herpes HPV", "Light Diseases", "Lupus", "Melanoma", "Nail Fungus", "Poison Ivy", "Psoriasis Lichen Planus", "Rosacea", "Seborrheic Keratoses", "Systemic Disease", "Tinea Ringworm", "Urticaria Hives", "Vascular Tumors", "Vasculitis", "Warts Molluscum"]
 
 transform = transforms.Compose([
     transforms.Resize(300),
@@ -92,23 +67,28 @@ transform = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-uploaded_file = st.file_uploader("📤 Upload ảnh da cần chẩn đoán", type=["jpg", "jpeg", "png"])
-
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, use_column_width=True)
-
+def predict(image):
     input_tensor = transform(image).unsqueeze(0)
-
     with torch.no_grad():
         output = model(input_tensor)
         probs = torch.nn.functional.softmax(output[0], dim=0)
         top_prob, top_idx = torch.topk(probs, 3)
-
-    st.subheader("🔍 Kết quả dự đoán")
+    
+    results = []
     for i in range(3):
-        st.metric(label=f"Top {i+1}: **{class_names[top_idx[i]]}**", value=f"{top_prob[i].item()*100:.2f}%")
-else:
-    st.info("👆 Vui lòng upload ảnh da")
+        results.append(f"{class_names[top_idx[i]]}: {top_prob[i].item()*100:.2f}%")
+    return "\n".join(results)
 
-st.caption("Ứng dụng hỗ trợ chẩn đoán bệnh da liễu - Đồ án tốt nghiệp")
+# Gradio Interface
+iface = gr.Interface(
+    fn=predict,
+    inputs=gr.Image(type="pil", label="Upload ảnh da"),
+    outputs=gr.Textbox(label="Kết quả dự đoán (Top 3)"),
+    title="🩺 Chẩn đoán Bệnh Da Liễu",
+    description="Mô hình EfficientNet-B2 + CBAM | Đồ án tốt nghiệp",
+    examples=None,
+    allow_flagging="never"
+)
+
+if __name__ == "__main__":
+    iface.launch()
